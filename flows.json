@@ -1,0 +1,1201 @@
+[
+    {
+        "id": "56d82e1f262a1727",
+        "type": "tab",
+        "label": "Flux 4",
+        "disabled": false,
+        "info": "",
+        "env": []
+    },
+    {
+        "id": "79dc20e7cf1725aa",
+        "type": "inject",
+        "z": "56d82e1f262a1727",
+        "name": "Test Data (Simulation)",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "5",
+        "crontab": "",
+        "once": false,
+        "onceDelay": "",
+        "topic": "",
+        "payload": "msg.payload = {} ",
+        "payloadType": "str",
+        "x": 110,
+        "y": 40,
+        "wires": [
+            [
+                "1968de1028769e59"
+            ]
+        ]
+    },
+    {
+        "id": "c5c7b25a2b3b37b5",
+        "type": "inject",
+        "z": "56d82e1f262a1727",
+        "name": "Test Alerte (T>25)",
+        "repeat": "",
+        "payload": "{\"temperature\":32,\"humidity\":38,\"ac_state\":\"ON\"}",
+        "payloadType": "json",
+        "x": 130,
+        "y": 120,
+        "wires": [
+            [
+                "1968de1028769e59",
+                "af57b4b056aec2ee"
+            ]
+        ]
+    },
+    {
+        "id": "c7505ded0bf4bc7a",
+        "type": "mqtt in",
+        "z": "56d82e1f262a1727",
+        "name": "Réception ESP32 Sensors",
+        "topic": "esp32/sensors",
+        "qos": "1",
+        "datatype": "json",
+        "broker": "71b122707d710dc5",
+        "nl": false,
+        "rap": false,
+        "inputs": 0,
+        "x": 110,
+        "y": 220,
+        "wires": [
+            [
+                "1968de1028769e59",
+                "af57b4b056aec2ee",
+                "status_connexion"
+            ]
+        ]
+    },
+    {
+        "id": "1968de1028769e59",
+        "type": "debug",
+        "z": "56d82e1f262a1727",
+        "name": "Debug - Données Brutes MQTT",
+        "active": true,
+        "x": 450,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "af57b4b056aec2ee",
+        "type": "function",
+        "z": "56d82e1f262a1727",
+        "name": "Valider & Normaliser Données",
+        "func": "// Validation des données reçues du récepteur ESP32\n\nif (!msg.payload || typeof msg.payload !== 'object') {\n    node.error('Payload invalide ou vide');\n    node.status({fill:'red', shape:'ring', text:'Données invalides'});\n    return null;\n}\n\nlet data = msg.payload;\n\n// Extraction température (compatibilité avec différents formats)\nlet temperature = null;\nif (data.temperature !== undefined) {\n    temperature = parseFloat(data.temperature);\n} else if (data.temp !== undefined) {\n    temperature = parseFloat(data.temp);\n} else if (data.avgTemp !== undefined) {\n    temperature = parseFloat(data.avgTemp);\n}\n\n// Extraction humidité\nlet humidity = null;\nif (data.humidity !== undefined) {\n    humidity = parseFloat(data.humidity);\n} else if (data.humidite !== undefined) {\n    humidity = parseFloat(data.humidite);\n} else if (data.avgHumidity !== undefined) {\n    humidity = parseFloat(data.avgHumidity);\n}\n\n// Validation des valeurs\nif (isNaN(temperature) || isNaN(humidity)) {\n    node.error('Température ou humidité non numériques: T=' + temperature + ' H=' + humidity);\n    node.status({fill:'red', shape:'ring', text:'Valeurs NaN'});\n    return null;\n}\n\n// Vérification plausibilité\nif (temperature < -40 || temperature > 80) {\n    node.warn('Température hors plage: ' + temperature);\n    node.status({fill:'yellow', shape:'ring', text:'T hors plage: ' + temperature});\n    return null;\n}\n\nif (humidity < 0 || humidity > 100) {\n    node.warn('Humidité hors plage: ' + humidity);\n    node.status({fill:'yellow', shape:'ring', text:'H hors plage: ' + humidity});\n    return null;\n}\n\n// Extraction état AC\nconst modes = ['Auto', 'Cool', 'Dry', 'Heat', 'Fan'];\nlet auto_mode = data.auto_mode || false;\nlet ac_power;\n\nif (auto_mode) {\n    ac_power = temperature > 25; // Auto : ON si temp dépasse seuil\n} else {\n    ac_power = data.ac_power || false; // Manuel : respecter ESP32\n}\n\nlet ac_mode = modes[data.ac_mode] || 'Cool';\nlet ac_state = ac_power ? ('ON | ' + ac_mode) : 'OFF';\n\n// Métadonnées\nlet now = new Date();\n\n// Construction payload normalisé\nmsg.payload = {\n    // Données capteurs\n    temperature: Math.round(temperature * 10) / 10,\n    humidity: Math.round(humidity * 10) / 10,\n\n    // État climatiseur\n    ac_state: ac_state,\n    ac_power: ac_power,\n    ac_mode: ac_mode,\n    ac_temp_set: data.ac_temp_set || 23,\n    ac_fan_speed: data.ac_fan_speed || 0,\n    auto_mode: auto_mode,\n\n    // Données capteurs détaillées\n    local_temp: data.local_temp || null,\n    local_humidity: data.local_humidity || null,\n    remote_temp: data.remote_temp || null,\n    remote_humidity: data.remote_humidity || null,\n\n    // Métadonnées\n    device_id: data.device_id || 'ESP32_AC_001',\n    timestamp: data.ts_ms || now.getTime(),\n    received_at: now.toISOString(),\n    date_formatted: now.toLocaleString('fr-FR'),\n\n    // Données brutes\n    raw: data\n};\n\n// Alertes selon seuils réels du projet\nif (msg.payload.temperature > 26) {\n    msg.payload.alerte = '🔴 Temp trop haute: ' + msg.payload.temperature + '°C';\n    msg.payload.alerte_type = 'temp_high';\n} else if (msg.payload.temperature < 20) {\n    msg.payload.alerte = '❄️ Temp trop basse: ' + msg.payload.temperature + '°C';\n    msg.payload.alerte_type = 'temp_low';\n} else if (msg.payload.humidity > 75) {\n    msg.payload.alerte = '🌊 Humidité élevée: ' + msg.payload.humidity + '%';\n    msg.payload.alerte_type = 'humidity_high';\n} else if (msg.payload.humidity < 25) {\n    msg.payload.alerte = '🟥 Humidité basse: ' + msg.payload.humidity + '%';\n    msg.payload.alerte_type = 'humidity_low';\n} else {\n    msg.payload.alerte = '✅ Tout est normal';\n    msg.payload.alerte_type = 'ok';\n}\n\n// Statut visuel du nœud\nnode.status({\n    fill: msg.payload.alerte_type === 'ok' ? 'green' : 'yellow',\n    shape: 'dot',\n    text: 'T=' + msg.payload.temperature + '°C H=' + msg.payload.humidity + '%'\n});\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 430,
+        "y": 140,
+        "wires": [
+            [
+                "e5c7012f1b559b83",
+                "3613a7d3696cfda6",
+                "a1ecc11c409e01b3",
+                "formater_csv",
+                "8a8ca5d2005ac70a",
+                "bc2c5b603145987e",
+                "4db581e67ffd2afe",
+                "2d906a9f1799e837"
+            ]
+        ]
+    },
+    {
+        "id": "e5c7012f1b559b83",
+        "type": "debug",
+        "z": "56d82e1f262a1727",
+        "name": "Debug - Données Normalisées",
+        "active": true,
+        "x": 770,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "3613a7d3696cfda6",
+        "type": "function",
+        "z": "56d82e1f262a1727",
+        "name": "Stocker Context",
+        "func": "// Stocker les dernières données dans le contexte flow\nflow.set('lastData', msg.payload);\nflow.set('lastUpdate', Date.now());\n\n// Récupérer le statut backup depuis le contexte global\nvar backupStatus = global.get(\"backupStatus\") || \"BACKUP_OFF\";\n\n// Historique des 100 dernières valeurs\nlet history = flow.get('dataHistory') || [];\nhistory.push({\n    temp: msg.payload.temperature,\n    hum: msg.payload.humidity,\n    backup: backupStatus,        // ← AJOUTÉ\n    ts: Date.now()\n});\n\n// Garder seulement les 100 dernières\nif (history.length > 100) {\n    history = history.slice(-100);\n}\nflow.set('dataHistory', history);\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 760,
+        "y": 140,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "a1ecc11c409e01b3",
+        "type": "function",
+        "z": "56d82e1f262a1727",
+        "name": "Extraire État AC",
+        "func": "const modeIcons = ['🔄 Auto', '❄️ Mode Froid', '💧 Mode Sec', '🔥 Mode Chaud', '🌀 Ventilateur'];\nconst speeds = ['Auto', 'Low', 'Medium', 'High'];\n\n// Lire l'état RÉEL depuis l'ESP32 uniquement\nlet ac_power = msg.payload.ac_power || false;\nlet ac_mode_index = msg.payload.raw ? msg.payload.raw.ac_mode : 1;\nlet ac_temp_set = msg.payload.ac_temp_set || 23;\nlet ac_fan = speeds[msg.payload.raw ? msg.payload.raw.ac_fan_speed : 0] || 'Auto';\nlet auto_mode = msg.payload.auto_mode || false;\n\nlet acPower = ac_power ? 'ON' : 'OFF';\nlet acMode = modeIcons[ac_mode_index] || '❄️ Mode Froid';\n\nlet bgColor;\nif (!ac_power) {\n    bgColor = 'linear-gradient(135deg, #636e72 0%, #b2bec3 100%)';\n} else if (ac_mode_index === 1) {\n    bgColor = 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)';\n} else if (ac_mode_index === 3) {\n    bgColor = 'linear-gradient(135deg, #e74c3c 0%, #c0392b 100%)';\n} else if (ac_mode_index === 2) {\n    bgColor = 'linear-gradient(135deg, #00b894 0%, #00cec9 100%)';\n} else {\n    bgColor = 'linear-gradient(135deg, #a29bfe 0%, #6c5ce7 100%)';\n}\n\nmsg.payload = {\n    power: acPower,\n    mode: acMode,\n    temperature: msg.payload.temperature,\n    ac_temp_set: ac_temp_set,\n    fan_speed: ac_fan,\n    autoMode: auto_mode ? 'Activé' : 'Désactivé',\n    isOn: ac_power,\n    bgColor: bgColor\n};\n\nnode.status({\n    fill: ac_power ? 'green' : 'grey',\n    shape: 'dot',\n    text: 'AC ' + acPower + ' | ' + acMode\n});\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 700,
+        "y": 380,
+        "wires": [
+            [
+                "f6d0ce3147482dcb"
+            ]
+        ]
+    },
+    {
+        "id": "4db581e67ffd2afe",
+        "type": "function",
+        "z": "56d82e1f262a1727",
+        "name": "Anti-Spam Alertes",
+        "func": "const COOLDOWN_MS = 60000; // 1 minute\n\nlet temp = msg.payload.temperature;\nlet hum = msg.payload.humidity;\nlet tempKey = Math.round(temp);\nlet humKey = Math.round(hum);\n\n// ← AJOUTÉ : Récupérer statut backup\nlet backupActif = msg.payload.backup_actif || false;\nlet lastBackupState = flow.get('lastBackupState') || false;\n\nlet lastAlertTemp = flow.get('lastAlertTemp') || 0;\nlet lastAlertHum = flow.get('lastAlertHum') || 0;\nlet lastAlertTime = flow.get('lastAlertTime') || 0;\n\nlet now = Date.now();\n\nlet tempChanged = Math.abs(tempKey - lastAlertTemp) >= 1;\nlet humChanged = Math.abs(humKey - lastAlertHum) >= 2;\nlet cooldownPassed = (now - lastAlertTime) > COOLDOWN_MS;\n\n// ← AJOUTÉ : Backup changé d'état → passer immédiatement sans cooldown\nlet backupChanged = (backupActif !== lastBackupState);\n\nif (backupChanged) {\n    flow.set('lastBackupState', backupActif);\n    flow.set('lastAlertTime', now);\n    node.status({fill:'red', shape:'dot', text:'BACKUP - Email envoyé!'});\n    return msg;\n}\n\nif ((tempChanged || humChanged) && cooldownPassed) {\n    flow.set('lastAlertTemp', tempKey);\n    flow.set('lastAlertHum', humKey);\n    flow.set('lastAlertTime', now);\n    node.status({fill:'green', shape:'dot', text:'Message passé'});\n    return msg;\n}\n\nnode.status({fill:'yellow', shape:'ring', text:'Cooldown actif'});\nreturn null;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 690,
+        "y": 640,
+        "wires": [
+            [
+                "formater_email"
+            ]
+        ]
+    },
+    {
+        "id": "2d906a9f1799e837",
+        "type": "function",
+        "z": "56d82e1f262a1727",
+        "name": "Vérifier Seuils",
+        "func": "const THRESHOLDS = {\n    TEMP_MIN: 20,\n    TEMP_MAX: 26,\n    HUM_MIN: 25,\n    HUM_MAX: 75\n};\n\nlet temp = msg.payload.temperature;\nlet hum = msg.payload.humidity;\nlet ac_power = msg.payload.ac_power;\nlet ac_mode = msg.payload.ac_mode;\nlet auto_mode = msg.payload.auto_mode;\n\n// ← AJOUTÉ : Récupérer statut backup\nlet backupStatus = global.get(\"backupStatus\") || \"BACKUP_OFF\";\nlet backupActif = (backupStatus === \"BACKUP_ACTIF\");\n\nlet alerts = [];\nlet alertLevel = 'normal';\n\n// ← AJOUTÉ : Vérifier backup EN PREMIER (priorité maximale)\nif (backupActif) {\n    alerts.push(`🚨 CRITIQUE: Climatiseur backup déclenché ! Clim principal en panne.`);\n    alertLevel = 'critical';\n}\n\nif (temp >= THRESHOLDS.TEMP_MAX) {\n    alerts.push(`🔥 Température élevée: ${temp.toFixed(1)}°C (MAX: ${THRESHOLDS.TEMP_MAX}°C)`);\n    alertLevel = 'critical';\n} else if (temp < THRESHOLDS.TEMP_MIN) {\n    alerts.push(`❄️ Température basse: ${temp.toFixed(1)}°C (MIN: ${THRESHOLDS.TEMP_MIN}°C)`);\n    alertLevel = alertLevel === 'critical' ? 'critical' : 'warning';\n}\n\nif (hum > THRESHOLDS.HUM_MAX) {\n    alerts.push(`🌊 Humidité élevée: ${hum.toFixed(1)}% (MAX: ${THRESHOLDS.HUM_MAX}%)`);\n    alertLevel = alertLevel === 'critical' ? 'critical' : 'warning';\n} else if (hum < THRESHOLDS.HUM_MIN) {\n    alerts.push(`🟥 Humidité basse: ${hum.toFixed(1)}% (MIN: ${THRESHOLDS.HUM_MIN}%)`);\n    alertLevel = alertLevel === 'critical' ? 'critical' : 'warning';\n}\n\nmsg.payload = {\n    alerts: alerts,\n    hasAlert: alerts.length > 0,\n    level: alertLevel,\n    temperature: temp,\n    humidity: hum,\n    ac_power: ac_power,\n    ac_mode: ac_mode,\n    auto_mode: auto_mode,\n    backup_actif: backupActif,        // ← AJOUTÉ\n    backup_status: backupStatus       // ← AJOUTÉ\n};\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 680,
+        "y": 720,
+        "wires": [
+            [
+                "336bd258234bcd53",
+                "3c84cf4c5c2a57fc",
+                "formater_email"
+            ]
+        ]
+    },
+    {
+        "id": "336bd258234bcd53",
+        "type": "debug",
+        "z": "56d82e1f262a1727",
+        "name": "Debug - Alertes",
+        "active": true,
+        "x": 1120,
+        "y": 820,
+        "wires": []
+    },
+    {
+        "id": "3c84cf4c5c2a57fc",
+        "type": "function",
+        "z": "56d82e1f262a1727",
+        "name": "Widget Alerte Dashboard",
+        "func": "var alerts = msg.payload.alerts || [];\nvar hasAlert = msg.payload.hasAlert || false;\nvar level = msg.payload.level || 'normal';\nvar temp = msg.payload.temperature || 0;\nvar hum = msg.payload.humidity || 0;\n\n// ← AJOUTÉ : Récupérer statut backup\nvar backupActif = msg.payload.backup_actif || false;\nvar backupStatus = msg.payload.backup_status || \"BACKUP_OFF\";\n\nmsg.payload = {\n    hasAlert: hasAlert,\n    level: level,\n    alerts: alerts,\n    temperature: temp,\n    humidity: hum,\n    backup_actif: backupActif,      // ← AJOUTÉ\n    backup_status: backupStatus     // ← AJOUTÉ\n};\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1150,
+        "y": 740,
+        "wires": [
+            [
+                "f49f5385af4bffa8"
+            ]
+        ]
+    },
+    {
+        "id": "f1d294fd2927f882",
+        "type": "function",
+        "z": "56d82e1f262a1727",
+        "name": "Traiter Commande AC",
+        "func": "// Si le payload est déjà un objet JSON valide, le passer directement\nif (typeof msg.payload === 'object' && Object.keys(msg.payload).length > 0) {\n    msg.payload = JSON.stringify(msg.payload);\n    return msg;\n}\n\nlet payload = msg.payload;\nlet command = {};\n\nif (payload === \"toggle_power\") {\n    let currentState = flow.get('acPowerState') || false;\n    let newState = !currentState;\n    flow.set('acPowerState', newState);\n    command = { power: newState ? 1 : 0 };\n} else if (payload === \"next_mode\" || payload === \"toggle_mode\") {\n    let currentMode = flow.get('acMode') || 1;\n    currentMode = (currentMode + 1) % 5;\n    flow.set('acMode', currentMode);\n    command = { mode: currentMode };\n} else if (payload === \"temp_up\") {\n    let currentTemp = flow.get('acTemp') || 23;\n    if (currentTemp < 30) currentTemp++;\n    flow.set('acTemp', currentTemp);\n    command = { temperature: currentTemp };\n} else if (payload === \"temp_down\") {\n    let currentTemp = flow.get('acTemp') || 23;\n    if (currentTemp > 16) currentTemp--;\n    flow.set('acTemp', currentTemp);\n    command = { temperature: currentTemp };\n} else {\n    return null; // bloquer les messages inconnus\n}\n\nmsg.payload = JSON.stringify(command);\nmsg.topic = \"esp32/ac/control\";\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 460,
+        "y": 980,
+        "wires": [
+            [
+                "19c9033b5eaa294b",
+                "373d447df55d500e"
+            ]
+        ]
+    },
+    {
+        "id": "373d447df55d500e",
+        "type": "mqtt out",
+        "z": "56d82e1f262a1727",
+        "name": "Envoyer Commande AC",
+        "topic": "esp32/ac/control",
+        "qos": "1",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "71b122707d710dc5",
+        "x": 770,
+        "y": 1000,
+        "wires": []
+    },
+    {
+        "id": "19c9033b5eaa294b",
+        "type": "debug",
+        "z": "56d82e1f262a1727",
+        "name": "Debug Commande AC",
+        "active": true,
+        "tosidebar": true,
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 740,
+        "y": 1080,
+        "wires": []
+    },
+    {
+        "id": "status_connexion",
+        "type": "function",
+        "z": "56d82e1f262a1727",
+        "name": "Status Connexion",
+        "func": "const lastUpdate = new Date().toLocaleString('fr-FR');\n\nmsg.payload = `<div style=\"padding:12px; background:linear-gradient(135deg, #3dbb6e 0%, #00b09b 100%); border-radius:8px; text-align:center;\">\n    <div style=\"font-size:16px; color:#fff;\">✅ ESP32 Connecté</div>\n    <div style=\"font-size:11px; opacity:0.9; margin-top:3px; color:#fff;\">MAJ: ${lastUpdate}</div>\n</div>`;\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 330,
+        "y": 360,
+        "wires": [
+            [
+                "ef5c764e4436e1da"
+            ]
+        ]
+    },
+    {
+        "id": "formater_email",
+        "type": "function",
+        "z": "56d82e1f262a1727",
+        "name": "Formater Email HTML",
+        "func": "let temp = msg.payload.temperature;\nlet hum = msg.payload.humidity;\nlet autoMode = msg.payload.auto_mode ? 'Activé' : 'Désactivé';\n\nlet backupStatus = global.get(\"backupStatus\") || \"BACKUP_OFF\";\nlet backupActif = (backupStatus === \"BACKUP_ACTIF\");\n\nconst TEMP_MIN = 20;\nconst TEMP_MAX = 26;\nconst HUM_MIN = 25;\nconst HUM_MAX = 75;\n\nlet color, icon, title, description, gradient;\nlet acStatus, acMode;\n\nif (backupActif) {\n    color = \"#E74C3C\";\n    icon = \"🚨\";\n    title = \"CRITIQUE : Climatiseur Backup Déclenché\";\n    description = \"Le climatiseur principal est en panne ou inefficace. Le backup a été activé automatiquement.\";\n    gradient = \"linear-gradient(135deg, #E74C3C 0%, #922B21 100%)\";\n    acStatus = 'BACKUP ON ⚠️';\n    acMode = 'Backup actif';\n} else if (temp >= TEMP_MAX) {\n    color = \"#E74C3C\";\n    icon = \"🔥\";\n    title = \"Alerte : Température élevée\";\n    description = \"Température supérieure ou égale à 26°C. Mode froid activé.\";\n    gradient = \"linear-gradient(135deg, #E74C3C 0%, #C0392B 100%)\";\n    acStatus = 'ON ✅';\n    acMode = 'Mode Froid';\n} else if (temp < TEMP_MIN) {\n    color = \"#3498DB\";\n    icon = \"❄️\";\n    title = \"Alerte : Température basse\";\n    description = \"Température inférieure à 20°C. Mode chaud activé.\";\n    gradient = \"linear-gradient(135deg, #3498DB 0%, #2980B9 100%)\";\n    acStatus = 'ON ✅';\n    acMode = 'Mode Chaud';\n} else if (hum > HUM_MAX) {\n    color = \"#9B59B6\";\n    icon = \"💧\";\n    title = \"Alerte : Humidité élevée\";\n    description = \"Humidité supérieure à 75%. Mode Dry activé.\";\n    gradient = \"linear-gradient(135deg, #9B59B6 0%, #8E44AD 100%)\";\n    acStatus = 'ON ✅';\n    acMode = 'Mode Dry';\n} else if (hum < HUM_MIN) {\n    color = \"#F39C12\";\n    icon = \"🌵\";\n    title = \"Alerte : Humidité faible\";\n    description = \"Humidité inférieure à 25%.\";\n    gradient = \"linear-gradient(135deg, #F39C12 0%, #E67E22 100%)\";\n    acStatus = msg.payload.ac_power ? 'ON ✅' : 'OFF ❌';\n    acMode = msg.payload.ac_mode || '—';\n} else {\n    node.status({fill:'green', shape:'dot', text:'Normal - pas d email'});\n    return null;\n}\n\nmsg.topic = `${icon} ${title} - Monitoring ESP32`;\n\nmsg.payload = `\n<div style=\"font-family: Arial, sans-serif; background:#f4f6f8; padding:20px;\">\n  <div style=\"max-width:600px; margin:auto; background:white; border-radius:10px; overflow:hidden; box-shadow:0 4px 10px rgba(0,0,0,0.1);\">\n    \n    <div style=\"background:${gradient}; color:white; padding:20px; text-align:center;\">\n      <h2 style=\"margin:0;\">${icon} ${title}</h2>\n    </div>\n    \n    <div style=\"padding:20px; color:#333;\">\n      <p>${description}</p>\n      \n      <table style=\"width:100%; border-collapse:collapse;\">\n        <tr>\n          <td><strong>🌡️ Température :</strong></td>\n          <td>${temp.toFixed(1)} °C</td>\n        </tr>\n        <tr>\n          <td><strong>💧 Humidité :</strong></td>\n          <td>${hum.toFixed(1)} %</td>\n        </tr>\n        <tr>\n          <td><strong>❄️ Climatisation :</strong></td>\n          <td>${acStatus} — ${acMode}</td>\n        </tr>\n        <tr>\n          <td><strong>⚙️ Mode Auto :</strong></td>\n          <td>${autoMode}</td>\n        </tr>\n        <tr style=\"background:${backupActif ? '#FDEDEC' : '#F2F3F4'};\">\n          <td><strong>🔄 Clim Backup :</strong></td>\n          <td style=\"color:${backupActif ? '#E74C3C' : '#7f8c8d'}; font-weight:bold;\">\n            ${backupActif ? '⚠️ ACTIF — Panne clim principal !' : '❌ OFF'}\n          </td>\n        </tr>\n      </table>\n    </div>\n    \n    <div style=\"background:#ecf0f1; padding:10px; text-align:center; font-size:12px; color:#7f8c8d;\">\n      ESP32 Monitoring System\n    </div>\n    \n  </div>\n</div>\n`;\n\nnode.status({fill:'red', shape:'dot', text:'Alerte envoyée: ' + title});\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1160,
+        "y": 600,
+        "wires": [
+            [
+                "2b3653fe9069b77e"
+            ]
+        ]
+    },
+    {
+        "id": "formater_csv",
+        "type": "function",
+        "z": "56d82e1f262a1727",
+        "name": "Formater CSV Complet",
+        "func": "const BASE_PATH = 'C:/Users/TPC/Desktop/Stage PFE/PFE Excel';\nconst SEP = ';';\n\nif (!msg.payload || typeof msg.payload !== 'object') {\n    return null;\n}\n\nlet temp = msg.payload.temperature;\nlet hum = msg.payload.humidity;\n\nif (temp === undefined || hum === undefined) {\n    return null;\n}\n\nconst pad = n => String(n).padStart(2, '0');\nconst now = new Date();\nconst year = now.getFullYear();\nconst month = pad(now.getMonth() + 1);\nconst day = pad(now.getDate());\nconst heure = `${pad(now.getHours())}:${pad(now.getMinutes())}`;\n\nconst fmt = n => n.toFixed(2).replace('.', ',');\n\n// Données climatiseur\nlet acPower = msg.payload.ac_power ? 'ON' : 'OFF';\nconst modes = ['Auto', 'Cool', 'Dry', 'Heat', 'Fan'];\nlet acMode = modes[msg.payload.ac_mode] || 'N/A';\nlet acTemp = msg.payload.ac_temp_set || 'N/A';\nlet autoMode = msg.payload.auto_mode ? 'ON' : 'OFF';\n\n// ← AJOUTÉ : Récupérer statut backup\nlet backupStatus = global.get(\"backupStatus\") || \"BACKUP_OFF\";\n\nconst folder = `${BASE_PATH}/${year}-${month}`;\nmsg.filename = `${folder}/Donnees_${day}.csv`;\n\nlet headersWritten = flow.get('csv_headers_' + day) || false;\nlet out = '';\n\nif (!headersWritten) {\n    // ← AJOUTÉ : Colonne Backup_Status dans l'entête\n    out += 'Date;Heure;Température (°C);Humidité (%);État AC;Mode AC;Temp Consigne;Mode Auto;Backup Status\\n';\n    flow.set('csv_headers_' + day, true);\n}\n\n// ← AJOUTÉ : ${backupStatus} à la fin de chaque ligne\nout += `${day}/${month}/${year}${SEP}${heure}${SEP}${fmt(temp)}${SEP}${fmt(hum)}${SEP}${acPower}${SEP}${acMode}${SEP}${acTemp}${SEP}${autoMode}${SEP}${backupStatus}\\n`;\n\nmsg.payload = out;\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 470,
+        "y": 840,
+        "wires": [
+            [
+                "ecrire_csv"
+            ]
+        ]
+    },
+    {
+        "id": "ecrire_csv",
+        "type": "file",
+        "z": "56d82e1f262a1727",
+        "name": "Écrire CSV",
+        "filename": "filename",
+        "filenameType": "msg",
+        "appendNewline": false,
+        "createDir": true,
+        "overwriteFile": "false",
+        "encoding": "utf8",
+        "x": 750,
+        "y": 840,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "2b3653fe9069b77e",
+        "type": "e-mail",
+        "z": "56d82e1f262a1727",
+        "server": "smtp.gmail.com",
+        "port": "465",
+        "authtype": "BASIC",
+        "saslformat": true,
+        "token": "oauth2Response.access_token",
+        "secure": true,
+        "tls": true,
+        "name": "nahedthabti9@gmail.com",
+        "dname": "Email Alerte",
+        "x": 1450,
+        "y": 600,
+        "wires": []
+    },
+    {
+        "id": "a2a4689406d7143c",
+        "type": "ui_gauge",
+        "z": "56d82e1f262a1727",
+        "name": "",
+        "group": "5faa7e5c076f3025",
+        "order": 1,
+        "width": "6",
+        "height": "6",
+        "gtype": "donut",
+        "title": "gauge Température",
+        "label": "°C",
+        "format": "{{value}}",
+        "min": 0,
+        "max": "50",
+        "colors": [
+            "#000cb3",
+            "#00e61b",
+            "#cb483a"
+        ],
+        "seg1": "20",
+        "seg2": "25",
+        "diff": false,
+        "className": "",
+        "x": 1170,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "8a8ca5d2005ac70a",
+        "type": "change",
+        "z": "56d82e1f262a1727",
+        "name": "Extraire Température",
+        "rules": [
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "msg.payload.temperature",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "topic",
+                "pt": "msg",
+                "to": "temperature",
+                "tot": "str"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 760,
+        "y": 240,
+        "wires": [
+            [
+                "a2a4689406d7143c",
+                "b909d90bd37c8159",
+                "a8574cccc8791276"
+            ]
+        ]
+    },
+    {
+        "id": "e676bfedde719ba7",
+        "type": "ui_gauge",
+        "z": "56d82e1f262a1727",
+        "name": "",
+        "group": "5faa7e5c076f3025",
+        "order": 3,
+        "width": "6",
+        "height": "6",
+        "gtype": "donut",
+        "title": "gauge Humidité",
+        "label": "%",
+        "format": "{{value}}",
+        "min": "20",
+        "max": "90",
+        "colors": [
+            "#fbbd13",
+            "#0fe600",
+            "#ca3838"
+        ],
+        "seg1": "25",
+        "seg2": "75",
+        "diff": false,
+        "className": "",
+        "x": 1040,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "bc2c5b603145987e",
+        "type": "change",
+        "z": "56d82e1f262a1727",
+        "name": "Extraire Humidité",
+        "rules": [
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "msg.payload.humidity",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "topic",
+                "pt": "msg",
+                "to": "humidity",
+                "tot": "str"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 750,
+        "y": 300,
+        "wires": [
+            [
+                "e676bfedde719ba7",
+                "121606d392634945",
+                "5110809fad84eee1"
+            ]
+        ]
+    },
+    {
+        "id": "b909d90bd37c8159",
+        "type": "ui_chart",
+        "z": "56d82e1f262a1727",
+        "name": "Courbe Température",
+        "group": "5faa7e5c076f3025",
+        "order": 2,
+        "width": "6",
+        "height": "6",
+        "label": "Évolution Température (30 min)",
+        "chartType": "line",
+        "legend": "false",
+        "xformat": "HH:mm:ss",
+        "interpolate": "bezier",
+        "nodata": "En attente des données ESP32...",
+        "dot": true,
+        "ymin": "0",
+        "ymax": "50",
+        "removeOlder": "30",
+        "removeOlderPoints": "",
+        "removeOlderUnit": "60",
+        "cutout": 0,
+        "useOneColor": false,
+        "useUTC": false,
+        "colors": [
+            "#cd79c6",
+            "#c130d5",
+            "#930687",
+            "#3d0b98",
+            "#1d1b1b",
+            "#100f0f",
+            "#100f0f",
+            "#141415",
+            "#0f0f10"
+        ],
+        "outputs": 1,
+        "useDifferentColor": false,
+        "className": "",
+        "x": 1220,
+        "y": 160,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "121606d392634945",
+        "type": "ui_chart",
+        "z": "56d82e1f262a1727",
+        "name": "Courbe Humidité",
+        "group": "5faa7e5c076f3025",
+        "order": 4,
+        "width": "6",
+        "height": "6",
+        "label": "Évolution Humidité (30 min)",
+        "chartType": "line",
+        "legend": "false",
+        "xformat": "HH:mm:ss",
+        "interpolate": "bezier",
+        "nodata": "En attente des données ESP32...",
+        "dot": true,
+        "ymin": "0",
+        "ymax": "100",
+        "removeOlder": "30",
+        "removeOlderPoints": "",
+        "removeOlderUnit": "60",
+        "cutout": 0,
+        "useOneColor": false,
+        "useUTC": false,
+        "colors": [
+            "#78bf9a",
+            "#0af062",
+            "#ff7f0e",
+            "#2ca02c",
+            "#1e201e",
+            "#1a1919",
+            "#1f1e1e",
+            "#1c1b1d",
+            "#1a181b"
+        ],
+        "outputs": 1,
+        "useDifferentColor": false,
+        "className": "",
+        "x": 1010,
+        "y": 320,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "5110809fad84eee1",
+        "type": "ui_text",
+        "z": "56d82e1f262a1727",
+        "group": "de13b97ce5595632",
+        "order": 4,
+        "width": 0,
+        "height": 0,
+        "name": "",
+        "label": "Valeur Humidité",
+        "format": "{{msg.payload}}",
+        "layout": "row-spread",
+        "className": "",
+        "style": false,
+        "font": "",
+        "fontSize": 16,
+        "color": "#000000",
+        "x": 1080,
+        "y": 220,
+        "wires": []
+    },
+    {
+        "id": "a8574cccc8791276",
+        "type": "ui_text",
+        "z": "56d82e1f262a1727",
+        "group": "de13b97ce5595632",
+        "order": 5,
+        "width": 0,
+        "height": 0,
+        "name": "",
+        "label": "Valeur Température",
+        "format": "{{msg.payload}}",
+        "layout": "row-spread",
+        "className": "",
+        "style": false,
+        "font": "",
+        "fontSize": 16,
+        "color": "#000000",
+        "x": 1230,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "2845fdf3415a703e",
+        "type": "ui_button",
+        "z": "56d82e1f262a1727",
+        "name": "Power ON/OFF",
+        "group": "48428310d0aaeabf",
+        "order": 1,
+        "width": "2",
+        "height": "1",
+        "passthru": false,
+        "label": "Power",
+        "tooltip": "Allumer/Éteindre climatiseur",
+        "color": "",
+        "bgcolor": "",
+        "className": "1",
+        "icon": "fa-power-off",
+        "payload": "toggle_power",
+        "payloadType": "str",
+        "topic": "esp32/ac/control",
+        "topicType": "str",
+        "x": 180,
+        "y": 900,
+        "wires": [
+            [
+                "f1d294fd2927f882"
+            ]
+        ]
+    },
+    {
+        "id": "4a7fc2c21053df03",
+        "type": "ui_button",
+        "z": "56d82e1f262a1727",
+        "name": "Temp - ",
+        "group": "48428310d0aaeabf",
+        "order": 4,
+        "width": "2",
+        "height": "1",
+        "passthru": false,
+        "label": "Temp - ",
+        "tooltip": "Diminuer Température",
+        "color": "",
+        "bgcolor": "#2196F3",
+        "className": "",
+        "icon": "fa-arrow-down",
+        "payload": "temp_down",
+        "payloadType": "str",
+        "topic": "esp32/ac/control",
+        "topicType": "str",
+        "x": 150,
+        "y": 1100,
+        "wires": [
+            [
+                "f1d294fd2927f882"
+            ]
+        ]
+    },
+    {
+        "id": "0668613cf9af6173",
+        "type": "ui_button",
+        "z": "56d82e1f262a1727",
+        "name": "Mode",
+        "group": "48428310d0aaeabf",
+        "order": 2,
+        "width": "2",
+        "height": "1",
+        "passthru": false,
+        "label": "Mode",
+        "tooltip": "Changer mode (Auto/Cool/Dry/Heat/Fan)",
+        "color": "",
+        "bgcolor": "",
+        "className": "",
+        "icon": "fa-sync",
+        "payload": "toggle_mode",
+        "payloadType": "str",
+        "topic": "esp32/ac/control",
+        "topicType": "str",
+        "x": 170,
+        "y": 980,
+        "wires": [
+            [
+                "f1d294fd2927f882"
+            ]
+        ]
+    },
+    {
+        "id": "85426a59e4566921",
+        "type": "ui_button",
+        "z": "56d82e1f262a1727",
+        "name": "Temp +",
+        "group": "48428310d0aaeabf",
+        "order": 3,
+        "width": "2",
+        "height": "1",
+        "passthru": false,
+        "label": "Temp +",
+        "tooltip": "Augmenter Température",
+        "color": "",
+        "bgcolor": "#e85a2a",
+        "className": "",
+        "icon": "fa-arrow-up",
+        "payload": "temp_up",
+        "payloadType": "str",
+        "topic": "esp32/ac/control",
+        "topicType": "str",
+        "x": 160,
+        "y": 1040,
+        "wires": [
+            [
+                "f1d294fd2927f882"
+            ]
+        ]
+    },
+    {
+        "id": "fca4d193470ac0fd",
+        "type": "ui_switch",
+        "z": "56d82e1f262a1727",
+        "name": "Mode Auto",
+        "label": "Mode Auto",
+        "tooltip": "Activer/Désactiver le mode automatique",
+        "group": "48428310d0aaeabf",
+        "order": 5,
+        "width": "3",
+        "height": "1",
+        "passthru": true,
+        "decouple": "false",
+        "topic": "esp32/ac/control",
+        "topicType": "str",
+        "style": "",
+        "onvalue": "true",
+        "onvalueType": "json",
+        "onicon": "",
+        "oncolor": "",
+        "offvalue": "false",
+        "offvalueType": "json",
+        "officon": "",
+        "offcolor": "",
+        "animate": false,
+        "className": "",
+        "x": 150,
+        "y": 1180,
+        "wires": [
+            [
+                "f1d294fd2927f882"
+            ]
+        ]
+    },
+    {
+        "id": "f6d0ce3147482dcb",
+        "type": "ui_template",
+        "z": "56d82e1f262a1727",
+        "group": "de13b97ce5595632",
+        "name": "État Climatiseur",
+        "order": 1,
+        "width": "6",
+        "height": "2",
+        "format": "<div style=\"text-align:center; padding:15px; background:{{msg.payload.bgColor}}; border-radius:8px;\">\n  <div style=\"font-size:14px; color:#fff; font-weight:600;\">🧊 CLIMATISEUR</div>\n  <div style=\"font-size:28px; font-weight:800; color:#fff;\">{{msg.payload.power}}</div>\n  <div style=\"font-size:12px; color:#fff;\">{{msg.payload.mode}} | {{msg.payload.temperature}}°C</div>\n  <div style=\"font-size:10px; color:#fff;\">Mode Auto: {{msg.payload.autoMode}}</div>\n</div>",
+        "storeOutMessages": false,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 1020,
+        "y": 400,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "ef5c764e4436e1da",
+        "type": "ui_template",
+        "z": "56d82e1f262a1727",
+        "group": "eae8e112dcc3903a",
+        "name": "État Connexion",
+        "order": 0,
+        "width": "12",
+        "height": "2",
+        "format": "<div ng-bind-html=\"msg.payload | trusted\"></div>",
+        "storeOutMessages": false,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 720,
+        "y": 500,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "d656e08eefa4e659",
+        "type": "ui_template",
+        "z": "56d82e1f262a1727",
+        "group": "eae8e112dcc3903a",
+        "name": "Info Systéme",
+        "order": 2,
+        "width": "12",
+        "height": "4",
+        "format": "<div style=\"background:#2e3244; border-radius:6px; padding:14px; color:#ccc;\">\n    <div style=\"font-size:11px; font-weight:700; color:#fff; border-bottom:1px solid #444; padding-bottom:8px; margin-bottom:10px;\">\n        🖥️ Système de Contrôle Environnemental\n    </div>\n    <div style=\"display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px;\">\n        <div>\n            <div style=\"font-size:9px; color:#888; text-transform:uppercase;\">Architecture</div>\n            <div style=\"font-size:11px; color:#eee; font-weight:600;\">FreeRTOS ESP32</div>\n        </div>\n        <div>\n            <div style=\"font-size:9px; color:#888; text-transform:uppercase;\">Protocoles</div>\n            <div style=\"font-size:11px; color:#eee; font-weight:600;\">ESP-NOW + MQTT</div> <!-- ← corrigé -->\n        </div>\n        <div>\n            <div style=\"font-size:9px; color:#888; text-transform:uppercase;\">Capteurs</div>\n            <div style=\"font-size:11px; color:#eee; font-weight:600;\">2x SHT31 (I2C)</div>\n        </div>\n        <div>\n            <div style=\"font-size:9px; color:#888; text-transform:uppercase;\">Seuils T°</div>\n            <div style=\"font-size:11px; color:#eee; font-weight:600;\">20°C – 26°C</div> <!-- ← corrigé -->\n        </div>\n        <div>\n            <div style=\"font-size:9px; color:#888; text-transform:uppercase;\">Seuils HR%</div>\n            <div style=\"font-size:11px; color:#eee; font-weight:600;\">25% – 75%</div>\n        </div>\n    </div>\n</div>",
+        "storeOutMessages": false,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 730,
+        "y": 560,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "70d530d61c55845b",
+        "type": "inject",
+        "z": "56d82e1f262a1727",
+        "name": "",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 330,
+        "y": 1260,
+        "wires": [
+            [
+                "b32b3ef4d99c0b95"
+            ]
+        ]
+    },
+    {
+        "id": "b32b3ef4d99c0b95",
+        "type": "function",
+        "z": "56d82e1f262a1727",
+        "name": "function 2",
+        "func": "msg.payload = JSON.stringify({\n    temperature: 22.5 + (Math.random() * 6 - 3),\n    humidity: 55 + (Math.random() * 20 - 10),\n    local_temp: 22.0,\n    local_humidity: 54.0,\n    ac_power: false,\n    ac_mode: 1,\n    ac_temp_set: 23,\n    auto_mode: false,\n    status: \"ok\"\n});\nmsg.topic = \"esp32/sensors\";\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 580,
+        "y": 1260,
+        "wires": [
+            [
+                "81679a89f2d53395"
+            ]
+        ]
+    },
+    {
+        "id": "81679a89f2d53395",
+        "type": "mqtt out",
+        "z": "56d82e1f262a1727",
+        "name": "",
+        "topic": "esp32/sensors",
+        "qos": "0",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "fa0413c4c639d90f",
+        "x": 820,
+        "y": 1260,
+        "wires": []
+    },
+    {
+        "id": "6b5c6888fb45800c",
+        "type": "mqtt in",
+        "z": "56d82e1f262a1727",
+        "name": "",
+        "topic": "esp32/ac/control",
+        "qos": "0",
+        "datatype": "auto-detect",
+        "broker": "fa0413c4c639d90f",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 360,
+        "y": 1320,
+        "wires": [
+            [
+                "2edeb6db2564be5a"
+            ]
+        ]
+    },
+    {
+        "id": "2edeb6db2564be5a",
+        "type": "json",
+        "z": "56d82e1f262a1727",
+        "name": "",
+        "property": "payload",
+        "action": "",
+        "pretty": false,
+        "x": 570,
+        "y": 1320,
+        "wires": [
+            [
+                "b02a99eca188d3e2"
+            ]
+        ]
+    },
+    {
+        "id": "b02a99eca188d3e2",
+        "type": "debug",
+        "z": "56d82e1f262a1727",
+        "name": "debug 2",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 780,
+        "y": 1320,
+        "wires": []
+    },
+    {
+        "id": "f49f5385af4bffa8",
+        "type": "ui_template",
+        "z": "56d82e1f262a1727",
+        "group": "eae8e112dcc3903a",
+        "name": "Affichage Alerts",
+        "order": 2,
+        "width": "6",
+        "height": "2",
+        "format": "<div style=\"width:100%\">\n\n    <!-- Alerte backup en priorité absolue -->\n    <div ng-if=\"msg.payload.backup_actif\"\n         style=\"background:#922B21; border-radius:8px; padding:16px; color:white; text-align:center; margin-bottom:8px;\">\n        <div style=\"font-size:16px; font-weight:800;\">🚨 CRITIQUE : BACKUP ACTIF</div>\n        <div style=\"font-size:13px; margin-top:4px;\">Climatiseur principal en panne !</div>\n        <div style=\"font-size:12px; margin-top:4px;\">\n            T: {{msg.payload.temperature}}°C | H: {{msg.payload.humidity}}%\n        </div>\n    </div>\n\n    <!-- Alertes normales température/humidité -->\n    <div ng-if=\"msg.payload.hasAlert && !msg.payload.backup_actif\" \n         ng-style=\"{'background': msg.payload.level === 'critical' ? '#e74c3c' : '#f5a623', 'border-radius':'8px', 'padding':'16px', 'color':'white', 'text-align':'center'}\">\n        <div style=\"font-size:16px; font-weight:800;\">\n            {{msg.payload.level === 'critical' ? '🔴 ALERTE CRITIQUE' : '⚠️ ALERTE WARNING'}}\n        </div>\n        <div ng-repeat=\"alert in msg.payload.alerts\" style=\"font-size:13px; margin-top:4px;\">\n            {{alert}}\n        </div>\n    </div>\n\n    <!-- Tout normal -->\n    <div ng-if=\"!msg.payload.hasAlert && !msg.payload.backup_actif\"\n         style=\"background:#27ae60; border-radius:8px; padding:16px; color:white; text-align:center;\">\n        <div style=\"font-size:16px; font-weight:800;\">✅ Tout est normal</div>\n        <div style=\"font-size:13px;\">T: {{msg.payload.temperature}}°C | H: {{msg.payload.humidity}}%</div>\n    </div>\n\n</div>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 1460,
+        "y": 740,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "0dcff6b853beda7e",
+        "type": "function",
+        "z": "56d82e1f262a1727",
+        "name": "Extraire État Backup",
+        "func": "var payload = msg.payload;\n\nif (typeof payload === \"string\") {\n    try { payload = JSON.parse(payload); } catch(e) { return null; }\n}\n\nvar backupStatus = payload.backup_status || \"BACKUP_OFF\";\nvar backupActive = (backupStatus === \"BACKUP_ACTIF\");\nvar temp = payload.temperature || 0;\n\nglobal.set(\"backupStatus\", backupStatus);\nglobal.set(\"backupActive\", backupActive);\n\nif (backupActive) {\n    msg.payload = `<div style=\"text-align:center; padding:15px; border-radius:10px; background-color:#e74c3c; color:white; font-size:16px; font-weight:bold;\">\n        🔴 CLIM BACKUP\n        <div style=\"font-size:18px; margin-top:5px; font-weight:900;\">ON</div>\n        <div style=\"font-size:12px; margin-top:5px; opacity:0.8;\">Temp: ${temp} °C</div>\n        <div style=\"font-size:11px; opacity:0.7;\">Seuil critique: 35°C</div>\n    </div>`;\n} else {\n    msg.payload = `<div style=\"text-align:center; padding:15px; border-radius:10px; background-color:#7f8c8d; color:white; font-size:16px; font-weight:bold;\">\n        🔴 CLIM BACKUP\n        <div style=\"font-size:18px; margin-top:5px; font-weight:900;\">OFF</div>\n        <div style=\"font-size:12px; margin-top:5px; opacity:0.8;\">Temp: ${temp} °C</div>\n        <div style=\"font-size:11px; opacity:0.7;\">Seuil critique: 35°C</div>\n    </div>`;\n}\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 720,
+        "y": 440,
+        "wires": [
+            [
+                "63bc5d52f9bc65da"
+            ]
+        ]
+    },
+    {
+        "id": "63bc5d52f9bc65da",
+        "type": "ui_template",
+        "z": "56d82e1f262a1727",
+        "group": "de13b97ce5595632",
+        "name": "État Clim Backup",
+        "order": 3,
+        "width": "6",
+        "height": "2",
+        "format": "<div ng-if=\"msg.payload.backup_active\" style=\"\n    text-align: center;\n    padding: 15px;\n    border-radius: 10px;\n    background-color: #e74c3c;\n    color: white;\n    font-size: 16px;\n    font-weight: bold;\">\n    🔴 CLIM BACKUP\n    <div style=\"font-size:18px; margin-top:5px; font-weight:900;\">ON</div>\n    <div style=\"font-size:12px; margin-top:5px; opacity:0.8;\">Actif !</div>\n</div>\n\n<div ng-if=\"!msg.payload.backup_active\" style=\"\n    text-align: center;\n    padding: 15px;\n    border-radius: 10px;\n    background-color: #7f8c8d;\n    color: white;\n    font-size: 16px;\n    font-weight: bold;\">\n    🔴 CLIM BACKUP\n    <div style=\"font-size:18px; margin-top:5px; font-weight:900;\">OFF</div>\n    <div style=\"font-size:12px; margin-top:5px; opacity:0.8;\">En veille</div>\n</div>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "className": "",
+        "x": 1050,
+        "y": 460,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "49d7864a46b4df8e",
+        "type": "mqtt in",
+        "z": "56d82e1f262a1727",
+        "name": "Réception Backup Status",
+        "topic": "storage/backup_status",
+        "qos": "1",
+        "datatype": "utf8",
+        "broker": "71b122707d710dc5",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 390,
+        "y": 260,
+        "wires": [
+            [
+                "0dcff6b853beda7e"
+            ]
+        ]
+    },
+    {
+        "id": "0ef6619fe993e079",
+        "type": "ui_spacer",
+        "z": "56d82e1f262a1727",
+        "name": "spacer",
+        "group": "",
+        "order": 2,
+        "width": 1,
+        "height": 1
+    },
+    {
+        "id": "1311c31ca3635e33",
+        "type": "ui_spacer",
+        "z": "56d82e1f262a1727",
+        "name": "spacer",
+        "group": "",
+        "order": 2,
+        "width": 1,
+        "height": 1
+    },
+    {
+        "id": "7890815d9b2c17a8",
+        "type": "ui_spacer",
+        "z": "56d82e1f262a1727",
+        "name": "spacer",
+        "group": "",
+        "order": 2,
+        "width": 1,
+        "height": 1
+    },
+    {
+        "id": "c5340d2f6b9cc766",
+        "type": "ui_spacer",
+        "z": "56d82e1f262a1727",
+        "name": "spacer",
+        "group": "",
+        "order": 3,
+        "width": 1,
+        "height": 1
+    },
+    {
+        "id": "71b122707d710dc5",
+        "type": "mqtt-broker",
+        "name": "",
+        "broker": "192.168.1.33",
+        "port": 1883,
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": 4,
+        "keepalive": 60,
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "5faa7e5c076f3025",
+        "type": "ui_group",
+        "name": "Température",
+        "tab": "bd8ae5874f6107fd",
+        "order": 3,
+        "disp": true,
+        "width": "12",
+        "collapse": false,
+        "className": ""
+    },
+    {
+        "id": "de13b97ce5595632",
+        "type": "ui_group",
+        "name": "Métriques en Temps Réel ",
+        "tab": "bd8ae5874f6107fd",
+        "order": 4,
+        "disp": true,
+        "width": "6",
+        "collapse": false,
+        "className": ""
+    },
+    {
+        "id": "48428310d0aaeabf",
+        "type": "ui_group",
+        "name": "Contrôle Climatiseur",
+        "tab": "bd8ae5874f6107fd",
+        "order": 2,
+        "disp": true,
+        "width": "12",
+        "collapse": false,
+        "className": ""
+    },
+    {
+        "id": "eae8e112dcc3903a",
+        "type": "ui_group",
+        "name": "Statut & Alertes",
+        "tab": "bd8ae5874f6107fd",
+        "order": 5,
+        "disp": true,
+        "width": 6,
+        "collapse": false,
+        "className": ""
+    },
+    {
+        "id": "fa0413c4c639d90f",
+        "type": "mqtt-broker",
+        "name": "Local MQTT",
+        "broker": "localhost",
+        "port": "1883",
+        "clientid": "",
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthPayload": "",
+        "closeTopic": "",
+        "closeQos": "0",
+        "closePayload": "",
+        "willTopic": "",
+        "willQos": "0",
+        "willPayload": ""
+    },
+    {
+        "id": "bd8ae5874f6107fd",
+        "type": "ui_tab",
+        "name": "ESP32 Monitoring",
+        "icon": "dashboard",
+        "order": 3,
+        "disabled": false,
+        "hidden": false
+    },
+    {
+        "id": "168d0a2df716039c",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-node-email": "5.2.1",
+            "node-red-dashboard": "3.6.6"
+        }
+    }
+]
