@@ -38,12 +38,12 @@ const int WDT_TIMEOUT = 60;
 // INTERVALLES DE TEMPS
 
 
-const unsigned long SENSOR_READ_INTERVAL = 10000UL;     // 10s - SensorTask
-const unsigned long CONTROL_CHECK_INTERVAL = 10000UL;   // 10s - ControlTask
+const unsigned long SENSOR_READ_INTERVAL = 300000UL;     // 5min - SensorTask
+const unsigned long CONTROL_CHECK_INTERVAL = 300000UL;   // 5min - ControlTask
 const unsigned long SUPERVISION_INTERVAL = 30000UL;     // 30s - SupervisionTask
 const unsigned long WATCHDOG_CHECK_INTERVAL = 30000UL;  // 30s - WatchdogTask
-const unsigned long BLYNK_UPDATE_INTERVAL = 20000UL;
-const unsigned long MQTT_PUBLISH_INTERVAL = 10000UL;
+const unsigned long BLYNK_UPDATE_INTERVAL = 30000UL;
+const unsigned long MQTT_PUBLISH_INTERVAL = 30000UL;
 const unsigned long IR_COOLDOWN = 300UL;
 const unsigned long NOTIFICATION_INTERVAL = 1 * 60 * 1000; // 1 minute  
 const unsigned long DATA_VALID_TIMEOUT = 300000UL;
@@ -386,42 +386,42 @@ void checkAndNotify() {
 }
 
 
-//   CONTRÔLE HUMIDITÉ
-
-
 void controleHumidite(float h) {
-  // Si humidité > 75% -> Mode DRY
+
+  // 1. Si humidité > 75% -> Mode DRY
   if (h > HUMIDITY_MAX && systemState.currentMode != 2) {
     Serial.println("[CTRL] Humidité > 75% -> Activation MODE DRY");
-
     if (!systemState.acPowerState) {
-      sendIRCommand(0, 1); // Power ON
+      sendIRCommand(0, 1);
       systemState.acPowerState = true;
       vTaskDelay(pdMS_TO_TICKS(500));
     }
-
-    sendIRCommand(1, 2); // Mode DRY
+    sendIRCommand(1, 2);
     systemState.currentMode = 2;
   }
-  // Si humidité < 25% et mode DRY actif -> Changer mode
-  else if (h < HUMIDITY_MIN && systemState.currentMode == 2) {
-    Serial.println("[CTRL] Humidité < 45% -> Désactivation MODE DRY");
 
+  // 2. Si humidité < 25% -> Contrôler selon température
+  else if (h < HUMIDITY_MIN) {
+    Serial.println("[CTRL] Humidité < 25% -> Vérification température");
     if (systemState.avgTemp > TEMP_MAX) {
-      sendIRCommand(1, 1); // Mode COOL
+      sendIRCommand(1, 1); // COOL
       systemState.currentMode = 1;
     } else if (systemState.avgTemp < TEMP_MIN) {
-      sendIRCommand(1, 3); // Mode HEAT
+      sendIRCommand(1, 3); // HEAT
       systemState.currentMode = 3;
     } else {
-      // NOUVEAU : humidité OK + température OK → FAN au lieu d'éteindre
-      Serial.println("[CTRL] Humidité OK → passage MODE FAN");
-      sendIRCommand(1, 4);            // Mode FAN
+      sendIRCommand(1, 4); // FAN
       systemState.currentMode = 4;
     }
   }
-}
 
+  // 3. Si humidité entre 25-75% -> Mode FAN
+  else if (systemState.currentMode != 4) {
+    Serial.println("[CTRL] Humidité OK -> Mode FAN");
+    sendIRCommand(1, 4);
+    systemState.currentMode = 4;
+  }
+}
 
 
 // CONTRÔLE TEMPÉRATURE
@@ -433,9 +433,9 @@ void controleTemperature(float t) {
     return;
   }
 
-  // Si température > 25°C -> Mode COOL
+  // Si température > 26°C -> Mode COOL
   if (t > TEMP_MAX && (!systemState.acPowerState || systemState.currentMode != 1)) {
-    Serial.println("[CTRL] Température > 25°C -> Activation MODE COOL");
+    Serial.println("[CTRL] Température > 26°C -> Activation MODE COOL");
 
     if (!systemState.acPowerState) {
       sendIRCommand(0, 1); // Power ON
@@ -797,7 +797,7 @@ void supervisionTask(void *parameter) {
     }
 
     // Attente courte pour réactivité réseau
-    vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(100));
+    vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(1000));
   }
 }
 
